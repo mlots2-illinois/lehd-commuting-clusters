@@ -1,0 +1,11 @@
+# Python >= 3.9 (developed on 3.14). Install with: pip install -r requirements.txt
+pandas
+numpy
+scipy
+scikit-learn
+python-igraph
+leidenalg
+matplotlib
+# Needed only by build_contiguity.py (cluster_07_contiguity.do):
+geopandas
+libpysal

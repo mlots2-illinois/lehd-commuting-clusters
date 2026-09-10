@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+title: "lehd-commuting-clusters: delineating commuting-based labor markets from LODES origin-destination flows"
+type: software
+authors:
+  - family-names: "Lotspeich-Yadao"
+    given-names: "Michael C."
+    name-suffix: "II"
+    affiliation: "University of Illinois Urbana-Champaign"
+    email: "mlots2@illinois.edu"
+version: "1.0.0"
+date-released: "2026-09-09"
+license: NCSA
+repository-code: "https://github.com/mlots2-illinois/lehd-commuting-clusters"
+keywords:
+  - LODES
+  - LEHD
+  - commuting zones
+  - labor markets
+  - hierarchical clustering
+  - Leiden
+  - Stata

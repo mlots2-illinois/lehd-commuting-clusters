@@ -1,0 +1,151 @@
+clear all
+cap log close
+local _logdate = subinstr("$S_DATE", " ", "", .)
+log using "$log/assess_07_partition_quality_${run_tag}_`_logdate'.log", replace text
+
+* assess_07_partition_quality.do -- compute modularity, mean silhouette width and mean within-cluster dissimilarity for the HC and Leiden partitions of the current run.
+* Called by: _master.do (assess phase, do_assess switch).
+* Reads:  $hc_input/<lvl>_<run_tag>/dissim_div<div>.csv; $temp/final_assignments_<run_tag>_<lvl>.dta; shell "$py" _py/partition_quality.py
+* Writes: $tables/partition_quality_<run_tag>.dta; $tables/partition_quality_<run_tag>.csv; $tables/partition_quality.tex (baseline run only)
+* Notes:  The metrics are computed in Python on the cached per-division dissimilarity matrices, so the script fails loudly if cluster_01_hc.do has not left them in $hc_input. Assignments go to Python as a temporary CSV of geoid and cluster.
+
+local pyqual "$program/_py/partition_quality.py"
+
+capture confirm file "`pyqual'"
+if _rc {
+    di as error "Missing `pyqual'; cannot compute partition quality."
+    exit 198
+}
+
+tempfile _acc
+local _have 0
+
+foreach lvl of global levels {
+
+    display as text _n "{hline 70}"
+    display as text "===== assess_07 LEVEL: `lvl' ====="
+    display as text "{hline 70}"
+
+    local dissim_dir "$hc_input/`lvl'_${run_tag}"
+    local _dfiles ""
+    capture local _dfiles : dir "`dissim_dir'" files "dissim_div*.csv"
+    if `:word count `_dfiles'' == 0 {
+        display as error "No dissim CSVs in `dissim_dir'; skipping `lvl'."
+        display as error "  Re-run cluster_01 (run_tag=${run_tag}) to regenerate the cached"
+        display as error "  per-division dissimilarity CSVs, then re-run assess_07."
+        continue
+    }
+    capture confirm file "$temp/final_assignments_${run_tag}_`lvl'.dta"
+    if _rc {
+        display as error "Missing final_assignments for `lvl'; skipping."
+        continue
+    }
+
+    foreach m in hc leiden {
+        local mlab = cond("`m'" == "hc", "HC", "Leiden")
+
+        use geoid `m'_cluster ///
+            using "$temp/final_assignments_${run_tag}_`lvl'.dta", clear
+        rename `m'_cluster cluster
+        quietly egen long _g = group(cluster)
+        quietly summarize _g, meanonly
+        local n_clusters = r(max)
+        drop _g
+
+        tempfile assign_csv_t
+        local assign_csv "`assign_csv_t'.csv"
+        export delimited geoid cluster using "`assign_csv'", replace
+
+        tempfile out_t
+        local out_csv "`out_t'.csv"
+
+        display as text "  `mlab' (`lvl'): computing modularity / silhouette / within-D ..."
+        capture erase "`out_csv'"
+        shell "$py" "`pyqual'" "`dissim_dir'" "`assign_csv'" "`out_csv'"
+
+        capture confirm file "`out_csv'"
+        if _rc {
+            display as error "assess_07: partition_quality.py produced no output for `mlab' `lvl'; check $py env."
+            cap log close
+            exit 601
+        }
+        import delimited using "`out_csv'", varnames(1) clear
+        local modularity = modularity[1]
+        local silhouette = silhouette[1]
+        local within_d   = within_d[1]
+        local n_div      = n_div_used[1]
+
+        display as result "    modularity=" %6.4f `modularity' ///
+            "  silhouette=" %6.4f `silhouette' "  within_D=" %6.4f `within_d' ///
+            "  (`n_div' divisions)"
+
+        clear
+        set obs 1
+        gen str6   geo_level   = "`lvl'"
+        gen str8   method      = "`mlab'"
+        gen long   n_clusters  = `n_clusters'
+        gen double within_d    = `within_d'
+        gen double modularity  = `modularity'
+        gen double silhouette  = `silhouette'
+
+        if `_have' append using "`_acc'"
+        save "`_acc'", replace
+        local _have 1
+    }
+}
+
+capture confirm file "`_acc'"
+if _rc {
+    display as error "No partition-quality metrics produced."
+    cap log close
+    exit 0
+}
+
+use "`_acc'", clear
+gen byte _ordg = cond(geo_level == "tract", 1, 2)
+gen byte _ordm = cond(method == "HC", 1, 2)
+sort _ordg _ordm
+drop _ordg _ordm
+
+label variable geo_level  "Geography (tract or county)"
+label variable method     "Algorithm"
+label variable n_clusters "Number of clusters"
+label variable within_d   "Mean within-cluster dissimilarity (compactness)"
+label variable modularity "Newman modularity on the similarity graph"
+label variable silhouette "Mean silhouette width (precomputed dissimilarity)"
+format within_d modularity silhouette %6.4f
+
+save           "$tables/partition_quality_${run_tag}.dta", replace
+export delimited using "$tables/partition_quality_${run_tag}.csv", replace
+display as result "  -> $tables/partition_quality_${run_tag}.{csv,dta}"
+
+list geo_level method n_clusters within_d modularity silhouette, noobs
+
+if "${run_tag}" == "baseline" {
+    capture file close _tex
+    file open _tex using "$tables/partition_quality.tex", write replace
+    file write _tex "% Auto-generated by assess_07_partition_quality.do; do not edit by hand." _n
+    file write _tex "\begin{tabular}{llrrrr}" _n
+    file write _tex "\toprule" _n
+    file write _tex "Geography & Method & \(n_{\text{clusters}}\) & Within-cluster \(D\) & Modularity & Silhouette \\" _n
+    file write _tex "\midrule" _n
+    local _N = _N
+    forvalues r = 1/`_N' {
+        local geo = strproper(geo_level[`r'])
+        local mth = method[`r']
+        local nc  = n_clusters[`r']
+        local wd  : display %5.3f within_d[`r']
+        local mo  : display %5.3f modularity[`r']
+        local si  : display %6.3f silhouette[`r']
+        file write _tex "`geo' & `mth' & `nc' & `=trim("`wd'")' & `=trim("`mo'")' & `=trim("`si'")' \\" _n
+    }
+    file write _tex "\bottomrule" _n
+    file write _tex "\end{tabular}" _n
+    file close _tex
+    display as result "  -> partition_quality.tex (LaTeX fragment for tab:partition_quality)"
+}
+else display as text "tex skipped: run_tag=${run_tag} != baseline"
+
+display as result _n "assess_07 done."
+
+cap log close

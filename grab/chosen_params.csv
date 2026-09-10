@@ -1,0 +1,5 @@
+parameter,symbol,tract,county
+flow_distance_weight,alpha,.8,.8
+distance_cap_km,dbar,100,1320
+hc_target_k,k,9000,700
+leiden_resolution,gamma,.171,.226
